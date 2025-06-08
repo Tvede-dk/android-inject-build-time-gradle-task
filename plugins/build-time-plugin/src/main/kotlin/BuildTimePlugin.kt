@@ -4,10 +4,13 @@ import org.gradle.api.*
 import org.gradle.api.file.*
 import org.gradle.api.provider.*
 import org.gradle.api.tasks.*
+import org.gradle.internal.buildoption.BooleanBuildOption
 import org.gradle.internal.cc.base.*
 import org.gradle.kotlin.dsl.*
 import java.io.*
 import java.time.*
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Adds the given build time (epoc seconds of the build day) as a resource string
@@ -26,7 +29,8 @@ class BuildTimePlugin : Plugin<Project> {
 
     private fun Project.foreachAndroidVariant(onVariant: (ApplicationVariant) -> Unit) {
         project.plugins.withType(AppPlugin::class.java) {
-            val androidComponents = project.extensions.getByType(ApplicationAndroidComponentsExtension::class.java)
+            val androidComponents =
+                project.extensions.getByType(ApplicationAndroidComponentsExtension::class.java)
             androidComponents.onVariants(callback = onVariant)
         }
     }
@@ -36,7 +40,8 @@ class BuildTimePlugin : Plugin<Project> {
         sourceDirs: SourceDirectories.Layered,
         variantName: String
     ) {
-        val assetCreationTask = project.tasks.register<BuildTimeTask>("create${variantName.titleCase()}BuildTimeResource")
+        val assetCreationTask =
+            project.tasks.register<BuildTimeTask>("create${variantName.titleCase()}BuildTimeResource")
         sourceDirs.addGeneratedSourceDirectory(
             assetCreationTask,
             BuildTimeTask::outputDirectory
@@ -58,15 +63,14 @@ abstract class BuildTimeTask : DefaultTask() {
     @get:Input
     abstract val fileName: Property<String>
 
-    @get:Input
-    abstract val time: Property<LocalDate>
 
     init {
         resourceName.convention("build_time_epoc_seconds")
         fileName.convention("build_time_epoc_seconds")
-        time.convention(LocalDate.now())
-        outputs.upToDateWhen { false }
         group = "build"
+        outputs.upToDateWhen {
+            isUpToDate()
+        }
     }
 
     override fun getDescription(): String? {
@@ -76,8 +80,7 @@ abstract class BuildTimeTask : DefaultTask() {
 
     @TaskAction
     fun taskAction() {
-        val valuesFolder = createValuesFolder()
-        val resourceFile = createStringResourceFile(valuesFolder)
+        val resourceFile: File = getBuildTimeFileAfterSetup()
         writeBuildTimeInto(resourceFile)
     }
 
@@ -92,7 +95,12 @@ abstract class BuildTimeTask : DefaultTask() {
     }
 
     private fun getEpocSecondsOfToday(): Long {
-        return time.get().toEpochSecond(LocalTime.MIN, ZoneOffset.UTC)
+        return LocalDate.now().toEpochSecond(LocalTime.MIN, ZoneOffset.UTC)
+    }
+
+    private fun getBuildTimeFileAfterSetup(): File {
+        val valuesFolder = createValuesFolder()
+        return createStringResourceFile(valuesFolder)
     }
 
     private fun createStringResourceFile(valuesFolder: File): File {
@@ -108,5 +116,28 @@ abstract class BuildTimeTask : DefaultTask() {
             logger.error("", e)
             throw e
         }
+    }
+
+
+    private fun epocSecondsInADay(): Long {
+        return 60 * 60 * 60 * 24
+    }
+
+    private fun isUpToDate(): Boolean {
+        val file = getBuildTimeFileAfterSetup()
+        if (!file.exists()) {
+            return false
+        }
+        return isFileUpdatedToday(file.lastModified())
+    }
+
+    private fun isFileUpdatedToday(lastModified: Long): Boolean {
+        val epocSecondsYesterday = getEpocSecondsOfToday() - epocSecondsInADay()
+        val epocSecondsTomorrow = getEpocSecondsOfToday() + epocSecondsInADay()
+
+        val lastModifiedEpocSeconds = lastModified.milliseconds.inWholeSeconds
+
+        return lastModifiedEpocSeconds >= epocSecondsYesterday &&
+                lastModifiedEpocSeconds <= epocSecondsTomorrow
     }
 }
